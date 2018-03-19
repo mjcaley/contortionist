@@ -4,12 +4,12 @@ from setuptools import setup, find_packages
 
 
 setup(
-    name='mail_purity',
+    name='contortionist',
     version='0.1.0',
 
     description='Mail content filtering service',
 
-    url='https://github.com/mjcaley/aiospamc',
+    url='https://github.com/mjcaley/contortionist',
 
     author='Michael Caley',
     author_email='mjcaley@darkarctic.com',
