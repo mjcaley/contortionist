@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
 
 from aiosmtpd.controller import Controller
-from gino import Gino
-
-
-db = Gino()
-
-
-class Meta(db.Model):
-    __tablename__ = 'meta'
-
-    schema = db.Column(db.Unicode())
-    version = db.Column(db.Integer())
-
-import asyncio
-async def database():
-    conn = await db.set_bind('sqlite://purity_db.sqlite')
-loop = asyncio.get_event_loop()
-loop.run_until_complete(database())
 
 
 class ExampleHandler:
