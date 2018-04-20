@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import aiosqlite
+import asyncio
 from enum import Enum
 from collections import namedtuple
 
@@ -29,6 +30,51 @@ class TaskStatus(Enum):
     WORKING = 2
     DONE = 3
     ERROR = 4
+
+
+class CommandType(Enum):
+    Query = 1
+    Stop = 99
+
+
+class Command:
+    def __init__(self, command_type, *args):
+        self.command_type = command_type
+        self.args = args
+        self.result = None
+        self.finished = asyncio.Event()
+
+    def finish(self, result):
+        self.result = result
+        self.finished.set()
+
+class Connection:
+    def __init__(self, filename, loop=None):
+        self.filename = filename
+        self._connected = False
+        self._queue = asyncio.Queue()
+        self._loop = loop or asyncio.get_event_loop()
+
+    def run(self):
+        self._connected = True
+        self._loop.run_in_executor(None, self._run)
+
+    def _run(self):
+        # Connect to sqlite
+        while True:
+            future_command = asyncio.run_coroutine_threadsafe(self._queue.get())
+            command = future_command.result()
+            if command.command_type == CommandType.Stop:
+                return
+            elif command.command_type == CommandType.Query:
+                pass
+                # run sql query
+                # call done(result)
+
+    def stop(self):
+        if self._connected:
+            asyncio.run_coroutine_threadsafe(self._queue.put(Command.Stop), self._loop)
+            self._connected = False
 
 
 class Database:
@@ -83,3 +129,47 @@ class Database:
         async with aiosqlite.connect(self.filename) as db:
             result = await db.execute('SELECT (status) FROM tasks WHERE id=?', (task_id,))
             return TaskStatus((await result.fetchone())[0])
+
+
+class Column:
+    def __init__(self, native_type, primary_key=False):
+        self.native_type = native_type
+        self.primary_key = primary_key
+
+class String(Column):
+    def __init__(self):
+
+
+class Session:
+    pass
+
+
+class MessageORM:
+    def __init__(self):
+        self._id = None
+        self._message = None
+        self._status = None
+
+    @property
+    def id(self):
+        return self._id
+
+    @id.setter
+    def id(self, value):
+        self._id = value
+
+    @property
+    def message(self):
+        return self._message
+
+    @message.setter
+    def message(self, value):
+        self._message = value
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        self._status = value
