@@ -95,6 +95,25 @@ class Handler(AsyncMessage):
         print('inserted email')
 
 
+class SMTPRunner:
+    def __init__(self, incoming_queue, config, *, loop=None):
+        self.incoming_queue = incoming_queue
+        self.config = config
+        self.smtp_server = None
+        self.loop = loop or asyncio.get_event_loop()
+
+    async def run(self):
+        self.smtp_server = await self.loop.create_server(
+            partial(SMTP, handler=Handler(self.incoming_queue, loop=self.loop), enable_SMTPUTF8=True),
+            port=10025  # from config
+        )  # Replace with manager class like the others
+
+    async def stop(self):
+        self.smtp_server.close()
+        await self.smtp_server.wait_closed()
+        self.smtp_server = None
+
+
 class Client:
     def __init__(self, outgoing_queue: Queue, *, loop=None):
         self.outgoing_queue = outgoing_queue
@@ -135,7 +154,7 @@ class Daemon:
         self.processing_mail = Queue()
         self.outgoing_mail = Queue()
 
-        self.smtp_server: asyncio.AbstractServer = None
+        self.smtp_server: asyncio.AbstractServer = SMTPRunner(self.incoming_mail, None, loop=loop)
         self.mail_saver = DebugQueueMover(self.incoming_mail, self.processing_mail)
         self.filter_manager = DebugQueueMover(self.processing_mail, self.outgoing_mail)
         self.smtp_client = DebugQueueDumper(self.outgoing_mail)
@@ -146,10 +165,7 @@ class Daemon:
 
     async def run(self):
         # check for a lock file
-        self.smtp_server = await self.loop.create_server(
-            partial(SMTP, handler=Handler(self.incoming_mail, loop=self.loop), enable_SMTPUTF8=True),
-            port=10025 # from config
-        ) # Replace with manager class like the others
+        await self.smtp_server.run()
         self.mail_saver.run()
         self.filter_manager.run()
         self.smtp_client.run()
@@ -158,8 +174,7 @@ class Daemon:
 
     async def stop(self):
         print('stopping server')
-        self.smtp_server.close()
-        await self.smtp_server.wait_closed()
+        await self.smtp_server.stop()
         print('SMTP server stopped')
         await self.mail_saver.stop()
         print('mail saver stopped')
