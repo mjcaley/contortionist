@@ -5,7 +5,9 @@ from asyncio import Queue
 from email.message import EmailMessage
 from functools import partial
 import logging
+from pathlib import Path
 
+import aiofiles
 import aiosmtpd
 import aiosmtplib
 
@@ -13,45 +15,62 @@ from aiosmtpd.handlers import AsyncMessage
 from aiosmtpd.smtp import SMTP
 
 
-class TaskCommand:
+class TaskAlreadyRunningException(Exception):
     pass
 
 
-class Kill(TaskCommand):
-    pass
-
-
-class TaskRunner:
-    def __init__(self, *, loop=None):
+class MailSaver:
+    def __init__(self, path, name_func, from_queue, to_queue, logger, *, loop=None):
         self._task = None
+        self.path = path
+        self.name_func = name_func
+        self.from_queue = from_queue
+        self.to_queue = to_queue
+        self.logger = logger
         self.loop = loop or asyncio.get_event_loop()
 
-    def run(self):
-        if not self._task:
-            self._task = self.loop.create_task(self._run())
-        else:
-            raise Exception
+    async def dequeue(self):
+        while True:
+            message = await self.from_queue.get()
+            self.loop.create_task(self.write_message(message))
 
-    async def _stop(self):
-        pass
+    async def write_message(self, message):
+        try:
+            async with aiofiles.open(Path(self.path + self.name_func(message)), 'w') as f:
+                await f.write(message.as_bytes())
+                await self.to_queue.put(message)
+        except IOError as e:
+            self.logger.error('Error writing message to disk (Message ID: %s; Exception: %s)', message['Message-ID'], e)
+        except PermissionError as e:
+            self.logger.error('Permission error writing message to disk (Message ID: %s, Exception: %s)', message['Message-ID'], e)
+        finally:
+            self.from_queue.task_done()
+
+    async def run(self):
+        if not self._task:
+            self._task = self.loop.create_task(self.dequeue())
+        else:
+            raise TaskAlreadyRunningException
 
     async def stop(self):
-        await self._stop()
-        self._task.cancel()
+        await self.from_queue.join()
+        await self.to_queue.join()
         try:
+            self._task.cancel()
             await self._task
             self._task = None
         except asyncio.CancelledError:
             print('[TaskRunner] cancelled')
 
 
-class DebugQueueMover(TaskRunner):
+class DebugQueueMover:
     def __init__(self, from_queue, to_queue, *, loop=None):
         self.from_queue = from_queue
         self.to_queue = to_queue
-        super().__init__(loop=loop)
+        self._task = None
+        self.loop = loop or asyncio.get_event_loop()
 
-    async def _run(self):
+    async def move_item_to_queue(self):
         while True:
             await asyncio.sleep(1)
             print('[DebugQueueMover] getting item')
@@ -60,16 +79,25 @@ class DebugQueueMover(TaskRunner):
             await self.to_queue.put(item)
             self.from_queue.task_done()
 
-    async def _stop(self):
+    async def run(self):
+        self._task = self.loop.create_task(self.move_item_to_queue())
+
+    async def stop(self):
         print('[DebugQueueMover] user stopping')
         await self.from_queue.join()
+        try:
+            self._task.cancel()
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._task = None
         print('[DebugQueueMover] user stopped')
 
 
-class DebugQueueDumper(TaskRunner):
+class DebugQueueDumper:
     def __init__(self, queue, *, loop=None):
         self.queue = queue
-        super().__init__(loop=loop)
+        self.loop = loop or asyncio.get_event_loop()
 
     async def _run(self):
         while True:
@@ -78,7 +106,10 @@ class DebugQueueDumper(TaskRunner):
             item = await self.queue.get()
             self.queue.task_done()
 
-    async def _stop(self):
+    async def run(self):
+        self.loop.create_task(self._run())
+
+    async def stop(self):
         print('[DebugQueueDumper] user stopping')
         await self.queue.join()
         print('[DebugQueueDumper] user stopped')
@@ -134,13 +165,6 @@ class Client:
         self._task.cancel()
 
 
-class MailSaver(TaskRunner):
-    def __init__(self, incoming_queue: Queue, processing_queue: Queue, *, loop=None):
-        self.incoming_queue = incoming_queue
-        self.processing_queue = processing_queue
-        super().__init__(loop=loop)
-
-
 class Filter:
     def __init__(self, processing_queue: Queue, outgoing_queue: Queue, *, loop=None):
         pass
@@ -154,38 +178,43 @@ class MessageQueueCollection:
 
 
 class Daemon:
-    def __init__(self, config, message_queue, mail_server_manager, mail_saver_manager, filter_manager, smtp_client_manager, *, loop=None):
+    def __init__(self,
+                 config,
+                 incoming_dispatcher,
+                 maildrop_dispatcher,
+                 filter_dispatcher,
+                 outgoing_dispatcher,
+                 database_connection,
+                 *, loop=None):
         self.config = config or None # TODO: accept config instance
 
-        self.message_queue = message_queue
+        self.incoming_dispatcher = incoming_dispatcher
+        self.maildrop_dispatcher = maildrop_dispatcher
+        self.filter_dispatcher = filter_dispatcher
+        self.outgoing_dispatcher = outgoing_dispatcher
 
-        self.mail_server_manager = mail_server_manager
-        self.mail_saver = mail_saver_manager
-        self.filter_manager = filter_manager
-        self.smtp_client = smtp_client_manager
-
-        self.db_connection = None
+        self.database_connection = database_connection
 
         self.loop = loop or asyncio.get_event_loop()
 
     async def run(self):
         # check for a lock file
-        await self.mail_server_manager.run()
-        self.mail_saver.run()
-        self.filter_manager.run()
-        self.smtp_client.run()
+        await self.incoming_dispatcher.run()
+        await self.maildrop_dispatcher.run()
+        await self.filter_dispatcher.run()
+        await self.outgoing_dispatcher.run()
 
         print('running the server apparently')
 
     async def stop(self):
         print('stopping server')
-        await self.mail_server_manager.stop()
+        await self.incoming_dispatcher.stop()
         print('SMTP server stopped')
-        await self.mail_saver.stop()
+        await self.maildrop_dispatcher.stop()
         print('mail saver stopped')
-        await self.filter_manager.stop()
+        await self.filter_dispatcher.stop()
         print('filter manager stopped')
-        await self.smtp_client.stop()
+        await self.outgoing_dispatcher.stop()
         print('SMTP client stopped')
 
 
@@ -206,13 +235,13 @@ async def dump_queue(queue):
 
 def daemon_factory(config, loop=None):
     # Runner classes are constructed based on the config
-    loop = loop or asyncio.get_event_loop()
+    logger = logging.getLogger()
     message_queue = MessageQueueCollection()
-    smtp_server_runner = SMTPRunner(message_queue.incoming_queue, None, loop=loop)
-    mail_saver_runner = DebugQueueMover(message_queue.incoming_queue, message_queue.processing_queue, loop=loop)
-    filter_runner = DebugQueueMover(message_queue.processing_queue, message_queue.outgoing_queue, loop=loop)
-    smtp_client_runner = DebugQueueDumper(message_queue.outgoing_queue, loop=loop)
-    daemon = Daemon(None, message_queue, smtp_server_runner, mail_saver_runner, filter_runner, smtp_client_runner, loop=loop)
+    smtp_server_runner = SMTPRunner(message_queue.incoming_queue, None)
+    mail_saver_runner = DebugQueueMover(message_queue.incoming_queue, message_queue.processing_queue)
+    filter_runner = DebugQueueMover(message_queue.processing_queue, message_queue.outgoing_queue)
+    smtp_client_runner = DebugQueueDumper(message_queue.outgoing_queue)
+    daemon = Daemon(None, smtp_server_runner, mail_saver_runner, filter_runner, smtp_client_runner, None)
 
     return daemon
 
@@ -229,5 +258,3 @@ if __name__ == '__main__':
     msg['Subject'] = 'Example message'
     loop.run_until_complete(asyncio.gather(send(msg, loop), send(msg, loop), send(msg, loop), send(msg, loop), send(msg, loop)))
     loop.run_until_complete(d.stop())
-
-    loop.run_until_complete(dump_queue(d.message_queue.incoming_queue))
