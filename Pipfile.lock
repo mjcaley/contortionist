@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "1b5cace1f085fddbba8c2230f6bdf85043d3b7da1a9836f7ba2b208903a72e47"
+            "sha256": "ff9801acd3795de1546c25a5dfcac8ba00f9596bc6743a44210b568e8804f599"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -16,10 +16,19 @@
         ]
     },
     "default": {
+        "aiofiles": {
+            "hashes": [
+                "sha256:25c66ea3872d05d53292a6b3f7fa0f86691512076446d83a505d227b5e76f668",
+                "sha256:852a493a877b73e11823bfd4e8e5ef2610d70d12c9eaed961bcd9124d8de8c10"
+            ],
+            "index": "pypi",
+            "version": "==0.3.2"
+        },
         "aiosmtpd": {
             "hashes": [
                 "sha256:8ab8cd2bb2459f8eb04b835bf1f0dbb8fe590140080b2b3b7793a0992270a557"
             ],
+            "index": "pypi",
             "version": "==1.1"
         },
         "aiosmtplib": {
@@ -27,12 +36,22 @@
                 "sha256:5ed0a0896aead9e99281ca61d3fc1114f8ad5874114f3814f68869d2c348521d",
                 "sha256:c9d77f9f7a7d6fdb8db29b412fa3971a13c01be1042f47a0e0a28522c9a494ff"
             ],
+            "index": "pypi",
             "version": "==1.0.2"
+        },
+        "aiospamc": {
+            "hashes": [
+                "sha256:183017c2f9aa20240000627566147e794377e53d2da1c3b292ef8b93f2d719c8",
+                "sha256:7947f33be8d09e85e9f1c265c58093fdc39f508f4aec698511076802dafdb13c"
+            ],
+            "index": "pypi",
+            "version": "==0.4.1"
         },
         "aiosqlite": {
             "hashes": [
                 "sha256:9eceb678e49b48fbd580e7f0a9c750655b1707b9f44f5a88fb4f05329c3175ee"
             ],
+            "index": "pypi",
             "version": "==0.3.0"
         },
         "atpublic": {
