@@ -12,10 +12,16 @@ aiosmtplib = "*"
 aiosqlite = "*"
 aiofiles = "*"
 aiospamc = "*"
+toml = "*"
+"e1839a8" = {path = ".", editable = true}
 
 
 [dev-packages]
 
+pytest = "*"
+pytest-asyncio = "*"
+pytest-cov = "*"
+pytest-runner = "*"
 
 
 [requires]
