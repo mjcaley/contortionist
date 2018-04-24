@@ -14,53 +14,7 @@ import aiosmtplib
 from aiosmtpd.handlers import AsyncMessage
 from aiosmtpd.smtp import SMTP
 
-
-class TaskAlreadyRunningException(Exception):
-    pass
-
-
-class MailSaver:
-    def __init__(self, path, name_func, from_queue, to_queue, logger, *, loop=None):
-        self._task = None
-        self.path = path
-        self.name_func = name_func
-        self.from_queue = from_queue
-        self.to_queue = to_queue
-        self.logger = logger
-        self.loop = loop or asyncio.get_event_loop()
-
-    async def dequeue(self):
-        while True:
-            message = await self.from_queue.get()
-            self.loop.create_task(self.write_message(message))
-
-    async def write_message(self, message):
-        try:
-            async with aiofiles.open(Path(self.path + self.name_func(message)), 'w') as f:
-                await f.write(message.as_bytes())
-                await self.to_queue.put(message)
-        except IOError as e:
-            self.logger.error('Error writing message to disk (Message ID: %s; Exception: %s)', message['Message-ID'], e)
-        except PermissionError as e:
-            self.logger.error('Permission error writing message to disk (Message ID: %s, Exception: %s)', message['Message-ID'], e)
-        finally:
-            self.from_queue.task_done()
-
-    async def run(self):
-        if not self._task:
-            self._task = self.loop.create_task(self.dequeue())
-        else:
-            raise TaskAlreadyRunningException
-
-    async def stop(self):
-        await self.from_queue.join()
-        await self.to_queue.join()
-        try:
-            self._task.cancel()
-            await self._task
-            self._task = None
-        except asyncio.CancelledError:
-            print('[TaskRunner] cancelled')
+from .mail_store_controller import MailStoreController
 
 
 class DebugQueueMover:
