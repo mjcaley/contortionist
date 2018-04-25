@@ -72,6 +72,10 @@ class Cursor:
     def arraysize(self):
         return self._cursor.arraysize
 
+    @arraysize.setter
+    def arraysize(self, size):
+        self._cursor.arraysize = size
+
     @property
     def description(self):
         return self._cursor.description
