@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import asyncio
+import logging
 import sqlite3
 from enum import Enum
 from collections import namedtuple
@@ -46,10 +47,10 @@ class Cursor:
         return await self._connection._call(self._cursor.fetchall)
 
 
-def connect(database, timeout=None, detect_types=None, isolation_level=None, cached_statements=None, uri=None, loop=None):
+async def connect(database, timeout=None, detect_types=None, isolation_level=None, cached_statements=None, uri=None, loop=None):
     loop = loop or asyncio.get_event_loop()
-    connection = Connection(database, timeout, detect_types, isolation_level, cached_statements, uri, loop)
-    connection.start()
+    connection = Connection(database, loop)
+    await connection.connect()
 
     return connection
 
@@ -63,18 +64,11 @@ class Connection:
         # self.cached_statements = cached_statements
         # self.uri = uri
 
-        self._running = False
+        self._running = asyncio.Event()
         self._connection = None
         self._future = None
         self._queries = asyncio.Queue()
         self.loop = loop or asyncio.get_event_loop()
-
-    def __del__(self):
-        if self._future:
-            try:
-                self._future.cancel()
-            except asyncio.CancelledError:
-                pass
 
     def _loop(self):
         self._connection = sqlite3.connect(
@@ -85,21 +79,24 @@ class Connection:
             # cached_statements=self.cached_statements,
             # uri=self.uri
         )
-        while self._running or not self._queries.empty():
-            # print('loop waiting for next query')
+
+        self.loop.call_soon_threadsafe(self._running.set)
+
+        while self.loop.call_soon_threadsafe(self._running.is_set) and self.loop.is_running():
             future = asyncio.run_coroutine_threadsafe(self._queries.get(), self.loop)
             try:
-                query = future.result()
-                # print('Query that we got', query, query.callback)
-                if query.callback:
-                    # print('callback found, executing')
-                    query.result = query.callback()
+                query = future.result(timeout=0.1)
+            except asyncio.TimeoutError:
+                future.cancel()
+                continue
+
+            try:
+                query.result = query.callback()
             except Exception as e:
                 query.result = e
             finally:
                 self.loop.call_soon_threadsafe(self._queries.task_done)
                 self.loop.call_soon_threadsafe(query.done.set)
-        # print('loop connection closed')
         self._connection.close()
 
     async def _call(self, callback):
@@ -111,38 +108,41 @@ class Connection:
         else:
             return call.result
 
-    def _run(self):
-        self._running = True
-        self._future = self.loop.run_in_executor(None, self._loop)
+    async def connect(self):
+        if not self._running.is_set():
+            self._future = self.loop.run_in_executor(None, self._loop)
+        await self._running.wait()
 
     async def cursor(self):
         return Cursor(self, await self._call(self._connection.cursor))
 
     async def close(self):
-        self._running = False
-        await self._queries.put(Kill())
+        self._running.clear()
         await self._future
         self._connection = None
         self._future = None
 
 
 if __name__ == '__main__':
-    async def main(conn):
+    async def main():
+        print('in main')
+        conn = await connect(':memory:')
+        print('created connection, trying to destroy it')
         print(conn._running)
-        conn._run()
-        print(conn._running)
-        await conn._call(None)
         cursor = await conn.cursor()
         thing_table = await cursor.execute('create table thing (a,b,c)')
         print(thing_table)
         print(await thing_table.fetchall())
         await asyncio.sleep(3)
-        await conn.close()
-        # await asyncio.sleep(3)
+        # await conn.close()
+        await asyncio.sleep(3)
 
     loop = asyncio.get_event_loop()
-    conn = Connection(':memory:')
-    loop.run_until_complete(main(conn))
+    loop.set_debug(True)
+    logging.basicConfig(level=logging.DEBUG)
+    loop.run_until_complete(main())
+    print(loop.is_running())
+    print('hey')
 
 
 # DB_NAME = 'contortionist.db'
