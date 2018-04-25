@@ -15,20 +15,10 @@ class AsyncCallable:
         self.done = asyncio.Event()
 
 
-Kill = partial(AsyncCallable, None)
-
-
 class Cursor:
     def __init__(self, connection, cursor):
         self._connection = connection
         self._cursor = cursor
-
-    # description read-only attribute
-    # rowcount read only attribute
-
-    async def close(self):
-        '''Close cursor.'''
-        pass
 
     async def execute(self, sql, *parameters):
         callback = partial(self._cursor.execute, sql, *parameters)
@@ -36,15 +26,49 @@ class Cursor:
 
         return self
 
+    async def executemany(self, sql, parameters):
+        callback = partial(self._cursor.executemany, sql, parameters)
+        self._cursor = await self._connection._call(callback)
+
+        return self
+
+    async def executescript(self, sql_script):
+        callback = partial(self._cursor.executescript, sql_script)
+        self._cursor = await self._connection._call(callback)
+
     async def fetchone(self):
         return await self._connection._call(self._cursor.fetchone)
 
     async def fetchmany(self, size=None):
         callback = partial(self._cursor.fetchmany, size or self._cursor.arraysize)
-        return await self._connection._call(partial(self._cursor.fetchmany, size))
+        return await self._connection._call(callback)
 
     async def fetchall(self):
         return await self._connection._call(self._cursor.fetchall)
+
+    async def close(self):
+        '''Close cursor.'''
+        await self._connection._call(self._cursor.close)
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+    @property
+    def arraysize(self):
+        return self._cursor.arraysize
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    @property
+    def connection(self):
+        return self._connection
 
 
 async def connect(database, timeout=None, detect_types=None, isolation_level=None, cached_statements=None, uri=None, loop=None):
@@ -116,30 +140,62 @@ class Connection:
     async def cursor(self):
         return Cursor(self, await self._call(self._connection.cursor))
 
+    async def commit(self):
+        await self._call(self._connection.commit)
+
+    async def rollback(self):
+        await self._call(self._connection.rollback)
+
     async def close(self):
         self._running.clear()
         await self._future
         self._connection = None
         self._future = None
 
+    async def execute(self, sql, *parameters):
+        cursor = await self.cursor()
+        return await cursor.execute(sql, *parameters)
+
+    async def executemany(self, sql, parameters):
+        cursor = await self.cursor()
+        return await cursor.executemany(sql, parameters)
+
+    async def executescript(self, sql_script):
+        cursor = await self.cursor()
+        return await cursor.executescript(sql_script)
+
+    async def create_function(self, name, num_params, func):
+        raise NotImplementedError
+
+    async def create_aggregate(self, name, num_params, func):
+        raise NotImplementedError
+
+    async def create_collation(self, name, callable):
+        raise NotImplementedError
+
+    async def set_authorizer(self, authorizer_callback):
+        raise NotImplementedError
+
 
 if __name__ == '__main__':
     async def main():
-        print('in main')
         conn = await connect(':memory:')
-        print('created connection, trying to destroy it')
-        print(conn._running)
         cursor = await conn.cursor()
         thing_table = await cursor.execute('create table thing (a,b,c)')
-        print(thing_table)
+        await cursor.execute('insert into thing values (1,2,3)')
+        await cursor.execute('insert into thing values (1,2,3)')
+        await cursor.execute('insert into thing values (1,2,3)')
+        await cursor.execute('insert into thing values (1,2,3)')
+        await cursor.execute('insert into thing values (1,2,3)')
+        await cursor.execute('select * from thing')
         print(await thing_table.fetchall())
         await asyncio.sleep(3)
         # await conn.close()
         await asyncio.sleep(3)
 
     loop = asyncio.get_event_loop()
-    loop.set_debug(True)
-    logging.basicConfig(level=logging.DEBUG)
+    # loop.set_debug(True)
+    # logging.basicConfig(level=logging.DEBUG)
     loop.run_until_complete(main())
     print(loop.is_running())
     print('hey')
