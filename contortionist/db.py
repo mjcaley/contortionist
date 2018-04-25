@@ -137,6 +137,16 @@ class Connection:
             self._future = self.loop.run_in_executor(None, self._loop)
         await self._running.wait()
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            await self.rollback()
+            return exc_type(exc_val).with_traceback(exc_tb)
+        else:
+            await self.commit()
+
     async def cursor(self):
         return Cursor(self, await self._call(self._connection.cursor))
 
@@ -148,7 +158,6 @@ class Connection:
 
     async def close(self):
         self._running.clear()
-        await self._future
         self._connection = None
         self._future = None
 
@@ -180,22 +189,28 @@ class Connection:
 if __name__ == '__main__':
     async def main():
         conn = await connect(':memory:')
+        conn2 = await connect(':memory:')
         cursor = await conn.cursor()
         thing_table = await cursor.execute('create table thing (a,b,c)')
+        async with conn2:
+            print('context manager!')
+            await conn2.execute('create table thing2 (a,b,c)')
+            await conn2.execute('insert into thing2 values (1,2,3)')
+            result = await conn2.execute('select * from thing2')
+            print(await result.fetchall())
+        print('exited context manager')
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('select * from thing')
-        print(await thing_table.fetchall())
-        await asyncio.sleep(3)
-        # await conn.close()
-        await asyncio.sleep(3)
+        print('thing_table cursor', await thing_table.fetchall())
+        await conn.close()
 
     loop = asyncio.get_event_loop()
-    # loop.set_debug(True)
-    # logging.basicConfig(level=logging.DEBUG)
+    loop.set_debug(True)
+    logging.basicConfig(level=logging.DEBUG)
     loop.run_until_complete(main())
     print(loop.is_running())
     print('hey')
