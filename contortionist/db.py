@@ -20,6 +20,16 @@ class Cursor:
         self._connection = connection
         self._cursor = cursor
 
+    async def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        row = await self.fetchone()
+        if row is None:
+            raise StopAsyncIteration
+
+        return row
+
     async def execute(self, sql, *parameters):
         callback = partial(self._cursor.execute, sql, *parameters)
         self._cursor = await self._connection._call(callback)
@@ -206,11 +216,14 @@ if __name__ == '__main__':
         await cursor.execute('insert into thing values (1,2,3)')
         await cursor.execute('select * from thing')
         print('thing_table cursor', await thing_table.fetchall())
+        await cursor.execute('select * from thing')
+        async for row in cursor:
+            print('async iter', row)
         await conn.close()
 
     loop = asyncio.get_event_loop()
-    loop.set_debug(True)
-    logging.basicConfig(level=logging.DEBUG)
+    # loop.set_debug(True)
+    # logging.basicConfig(level=logging.DEBUG)
     loop.run_until_complete(main())
     print(loop.is_running())
     print('hey')
