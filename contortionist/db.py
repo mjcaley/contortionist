@@ -265,45 +265,6 @@ if __name__ == '__main__':
 #     Stop = 99
 #
 #
-# class Command:
-#     def __init__(self, command_type, *args):
-#         self.command_type = command_type
-#         self.args = args
-#         self.result = None
-#         self.finished = asyncio.Event()
-#
-#     def finish(self, result):
-#         self.result = result
-#         self.finished.set()
-#
-# class Connection:
-#     def __init__(self, filename, loop=None):
-#         self.filename = filename
-#         self._connected = False
-#         self._queue = asyncio.Queue()
-#         self._loop = loop or asyncio.get_event_loop()
-#
-#     def run(self):
-#         self._connected = True
-#         self._loop.run_in_executor(None, self._run)
-#
-#     def _run(self):
-#         # Connect to sqlite
-#         while True:
-#             future_command = asyncio.run_coroutine_threadsafe(self._queue.get())
-#             command = future_command.result()
-#             if command.command_type == CommandType.Stop:
-#                 return
-#             elif command.command_type == CommandType.Query:
-#                 pass
-#                 # run sql query
-#                 # call done(result)
-#
-#     def stop(self):
-#         if self._connected:
-#             asyncio.run_coroutine_threadsafe(self._queue.put(Command.Stop), self._loop)
-#             self._connected = False
-#
 #
 # class Database:
 #     def __init__(self, filename):
