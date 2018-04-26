@@ -121,6 +121,7 @@ class ConnectionThread:
 
     def start(self):
         if not self._running:
+            self._running = True
             self.loop.run_in_executor(None, self.run)
 
     def stop(self):
@@ -136,10 +137,7 @@ class ConnectionThread:
             uri=self.uri
         )
 
-        self._running = True
-
         while self._running and self.loop.is_running():
-            print('sql loop')
             future = asyncio.run_coroutine_threadsafe(self.queries.get(), self.loop)
             try:
                 query = future.result(timeout=0.1)
@@ -169,11 +167,10 @@ class Connection:
         self.loop = loop or asyncio.get_event_loop()
 
     def __del__(self):
-        print('destroying')
         self.close()
 
     async def call(self, callback):
-        if self._thread:
+        if self._thread.running:
             call = AsyncCallable(callback)
             await self._thread.queries.put(call)
             await call.done.wait()
