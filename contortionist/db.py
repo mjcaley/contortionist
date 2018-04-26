@@ -6,6 +6,7 @@ import sqlite3
 from enum import Enum
 from collections import namedtuple
 from functools import partial
+from threading import Event
 
 
 class AsyncCallable:
@@ -85,10 +86,11 @@ class Cursor:
         return self._connection
 
 
-def connect(database, timeout=5.0, detect_types=0, isolation_level=None, cached_statements=100, uri=None, loop=None):
+async def connect(database, timeout=5.0, detect_types=0, isolation_level=None, cached_statements=100, uri=None, loop=None):
     loop = loop or asyncio.get_event_loop()
     connection = Connection(database, timeout, detect_types, isolation_level, cached_statements, uri, loop)
-    connection.connect()
+    print('connectiong created, connecting')
+    await connection.connect()
 
     return connection
 
@@ -102,7 +104,7 @@ class ConnectionThread:
                  cached_statements=100,
                  uri=None,
                  loop=None):
-        self._running = False
+        self._running = asyncio.Event()
         self.connection = None
         self.queries = asyncio.Queue()
 
@@ -117,27 +119,44 @@ class ConnectionThread:
 
     @property
     def running(self):
-        return self._running
+        return self._running.is_set()
 
     def start(self):
-        if not self._running:
-            self._running = True
+        print('thread start')
+        if not self._running.is_set():
+            self._running.set()
+            print('spawning thread')
             self.loop.run_in_executor(None, self.run)
 
     def stop(self):
-        self._running = False
+        print('stopping')
+        self._running.clear()
 
-    def run(self):
+    def connect(self):
         self.connection = sqlite3.connect(
-            self.database,
-            timeout=self.timeout,
-            detect_types=self.detect_types,
-            isolation_level=self.isolation_level,
-            cached_statements=self.cached_statements,
-            uri=self.uri
+                self.database,
+                timeout=self.timeout,
+                detect_types=self.detect_types,
+                isolation_level=self.isolation_level,
+                cached_statements=self.cached_statements,
+                uri=self.uri
         )
 
-        while self._running and self.loop.is_running():
+    def close(self):
+        self.connection.close()
+
+    def run(self):
+        # self.connection = sqlite3.connect(
+        #     self.database,
+        #     timeout=self.timeout,
+        #     detect_types=self.detect_types,
+        #     isolation_level=self.isolation_level,
+        #     cached_statements=self.cached_statements,
+        #     uri=self.uri
+        # )
+        print('thread spawned')
+        while self._running.is_set() and self.loop.is_running():
+            print('thread loop; loop running', self.loop.is_running(), 'thread running', self._running.is_set())
             future = asyncio.run_coroutine_threadsafe(self.queries.get(), self.loop)
             try:
                 query = future.result(timeout=0.1)
@@ -170,20 +189,18 @@ class Connection:
         self.close()
 
     async def call(self, callback):
-        if self._thread.running:
-            call = AsyncCallable(callback)
-            await self._thread.queries.put(call)
-            await call.done.wait()
-            if isinstance(call.result, Exception):
-                raise call.result
-            else:
-                return call.result
+        call = AsyncCallable(callback)
+        await self._thread.queries.put(call)
+        await call.done.wait()
+        if isinstance(call.result, Exception):
+            raise call.result
         else:
-            raise Exception   # TODO: define not connected exception
+            return call.result
 
-    def connect(self):
+    async def connect(self):
         if not self._thread.running:
             self._thread.start()
+            await self.call(self._thread.connect)
 
     async def __aenter__(self):
         return self
@@ -205,7 +222,9 @@ class Connection:
         await self.call(self._thread.connection.rollback)
 
     def close(self):
+        print('in close')
         if self._thread.running:
+            print('stopping')
             self._thread.stop()
 
     async def execute(self, sql, *parameters):
@@ -235,8 +254,10 @@ class Connection:
 
 if __name__ == '__main__':
     async def main():
-        conn = connect(':memory:')
-        conn2 = connect(':memory:')
+        print('connecting 1')
+        conn = await connect(':memory:')
+        print('connecting 2')
+        conn2 = await connect(':memory:')
         cursor = await conn.cursor()
         thing_table = await cursor.execute('create table thing (a,b,c)')
         async with conn2:
@@ -274,132 +295,85 @@ if __name__ == '__main__':
     print('hey')
 
 
-# DB_NAME = 'contortionist.db'
-#
-# Message = namedtuple('Message', ('id', 'message', 'status'))
-#
-#
-# class MessageStatus(Enum):
-#     NEW = 1
-#     WORKING = 2
-#     SENDING = 3
-#     DONE = 4
-#     ERROR = 5
-#
-#
-# class JobStatus(Enum):
-#     NEW = 1
-#     WORKING = 2
-#     DONE = 3
-#     ERROR = 4
-#
-#
-# class TaskStatus(Enum):
-#     NEW = 1
-#     WORKING = 2
-#     DONE = 3
-#     ERROR = 4
-#
-#
-# class CommandType(Enum):
-#     Query = 1
-#     Stop = 99
-#
-#
-#
-# class Database:
-#     def __init__(self, filename):
-#         self.filename = filename
-#
-#     async def create_message(self, message, status=MessageStatus.NEW):
-#         async with aiosqlite.connect(self.filename) as db:
-#             result = await db.execute('INSERT INTO messages (message, status) VALUES (?, ?)',
-#                                       (message, status))
-#             await db.commit()
-#
-#             return result.lastrowid
-#
-#     async def get_message(self, message_id):
-#         async with aiosqlite.connect(self.filename) as db:
-#             cursor = await db.execute('SELECT id, message, status FROM messages WHERE id=?', (message_id,))
-#             results = await cursor.fetchone()
-#             return Message(id=results[0], message=results[1], status=MessageStatus(results[2]))
-#
-#     # async def message_status(self, message_id):
-#     #     async with aiosqlite.connect(self.filename) as db:
-#     #         result = await db.execute('SELECT (status) FROM messages WHERE id=?', (message_id,))
-#     #         return MessageStatus((await result.fetchone())[0])
-#
-#     async def set_message_status(self, message_id, status):
-#         async with aiosqlite.connect(self.filename) as db:
-#             await db.execute('UPDATE messages SET status = ? WHERE id = ?', (message_id, status.value))
-#
-#     async def create_job(self, message_id, status=JobStatus.NEW):
-#         async with aiosqlite.connect(self.filename) as db:
-#             result = await db.execute('INSERT INTO jobs (message_id, status) VALUES (?, ?)',
-#                                       (message_id, status.value))
-#             await db.commit()
-#
-#             return result.lastrowid
-#
-#     async def job_status(self, job_id):
-#         async with aiosqlite.connect(self.filename) as db:
-#             result = await db.execute('SELECT (status) FROM jobs WHERE id=?', (job_id,))
-#             return JobStatus((await result.fetchone())[0])
-#
-#     async def create_task(self, job_id, name, priority, status=TaskStatus.NEW):
-#         async with aiosqlite.connect(self.filename) as db:
-#             result = await db.execute('INSERT INTO tasks (job_id, name, priority, status) VALUES (?, ?, ?, ?)',
-#                                       (job_id, name, priority, status.value))
-#             await db.commit()
-#
-#             return result.lastrowid
-#
-#     async def task_status(self, task_id):
-#         async with aiosqlite.connect(self.filename) as db:
-#             result = await db.execute('SELECT (status) FROM tasks WHERE id=?', (task_id,))
-#             return TaskStatus((await result.fetchone())[0])
-#
-#
-# class Column:
-#     def __init__(self, native_type, primary_key=False):
-#         self.native_type = native_type
-#         self.primary_key = primary_key
-#
-# class String(Column):
-#     def __init__(self):
-#
-#
-# class Session:
-#     pass
-#
-#
-# class MessageORM:
-#     def __init__(self):
-#         self._id = None
-#         self._message = None
-#         self._status = None
-#
-#     @property
-#     def id(self):
-#         return self._id
-#
-#     @id.setter
-#     def id(self, value):
-#         self._id = value
-#
-#     @property
-#     def message(self):
-#         return self._message
-#
-#     @message.setter
-#     def message(self, value):
-#         self._message = value
-#
-#     @property
-#     def status(self):
-#         return self._status
-#
-#     @status.setter
-#     def status(self, value):
-#         self._status = value
+DB_NAME = 'contortionist.db'
+
+Message = namedtuple('Message', ('id', 'message', 'status'))
+
+
+class MessageStatus(Enum):
+    NEW = 1
+    WORKING = 2
+    SENDING = 3
+    DONE = 4
+    ERROR = 5
+
+
+class JobStatus(Enum):
+    NEW = 1
+    WORKING = 2
+    DONE = 3
+    ERROR = 4
+
+
+class TaskStatus(Enum):
+    NEW = 1
+    WORKING = 2
+    DONE = 3
+    ERROR = 4
+
+
+class CommandType(Enum):
+    Query = 1
+    Stop = 99
+
+
+class Database:
+    def __init__(self, filename):
+        self.connection = Connection(filename)
+
+    async def create_message(self, message, status=MessageStatus.NEW):
+        async with self.connection as db:
+            result = await db.execute('INSERT INTO messages (message, status) VALUES (?, ?)',
+                                      (message, status))
+        return result.lastrowid
+
+    async def get_message(self, message_id):
+        async with self.connection as db:
+            cursor = await db.execute('SELECT id, message, status FROM messages WHERE id=?', (message_id,))
+            results = await cursor.fetchone()
+        return Message(id=results[0], message=results[1], status=MessageStatus(results[2]))
+
+    # async def message_status(self, message_id):
+    #     async with self.connection as db:
+    #         result = await db.execute('SELECT (status) FROM messages WHERE id=?', (message_id,))
+    #         return MessageStatus((await result.fetchone())[0])
+
+    async def set_message_status(self, message_id, status):
+        async with self.connection as db:
+            await db.execute('UPDATE messages SET status = ? WHERE id = ?', (message_id, status.value))
+
+    async def create_job(self, message_id, status=JobStatus.NEW):
+        async with self.connection as db:
+            result = await db.execute('INSERT INTO jobs (message_id, status) VALUES (?, ?)',
+                                      (message_id, status.value))
+            await db.commit()
+
+            return result.lastrowid
+
+    async def job_status(self, job_id):
+        async with self.connection as db:
+            result = await db.execute('SELECT (status) FROM jobs WHERE id=?', (job_id,))
+            return JobStatus((await result.fetchone())[0])
+
+    async def create_task(self, job_id, name, priority, status=TaskStatus.NEW):
+        async with self.connection as db:
+            result = await db.execute('INSERT INTO tasks (job_id, name, priority, status) VALUES (?, ?, ?, ?)',
+                                      (job_id, name, priority, status.value))
+            await db.commit()
+
+            return result.lastrowid
+
+    async def task_status(self, task_id):
+        async with self.connection as db:
+            result = await db.execute('SELECT (status) FROM tasks WHERE id=?', (task_id,))
+            return TaskStatus((await result.fetchone())[0])
