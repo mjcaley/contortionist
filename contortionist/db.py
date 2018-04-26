@@ -32,33 +32,33 @@ class Cursor:
 
     async def execute(self, sql, *parameters):
         callback = partial(self._cursor.execute, sql, *parameters)
-        self._cursor = await self._connection._call(callback)
+        self._cursor = await self._connection.call(callback)
 
         return self
 
     async def executemany(self, sql, parameters):
         callback = partial(self._cursor.executemany, sql, parameters)
-        self._cursor = await self._connection._call(callback)
+        self._cursor = await self._connection.call(callback)
 
         return self
 
     async def executescript(self, sql_script):
         callback = partial(self._cursor.executescript, sql_script)
-        self._cursor = await self._connection._call(callback)
+        self._cursor = await self._connection.call(callback)
 
     async def fetchone(self):
-        return await self._connection._call(self._cursor.fetchone)
+        return await self._connection.call(self._cursor.fetchone)
 
     async def fetchmany(self, size=None):
         callback = partial(self._cursor.fetchmany, size or self._cursor.arraysize)
-        return await self._connection._call(callback)
+        return await self._connection.call(callback)
 
     async def fetchall(self):
-        return await self._connection._call(self._cursor.fetchall)
+        return await self._connection.call(self._cursor.fetchall)
 
     async def close(self):
         '''Close cursor.'''
-        await self._connection._call(self._cursor.close)
+        await self._connection.call(self._cursor.close)
 
     @property
     def rowcount(self):
@@ -152,14 +152,17 @@ class Connection:
         print('destroying')
         self.close()
 
-    async def _call(self, callback):
-        call = AsyncCallable(callback)
-        await self._thread.queries.put(call)
-        await call.done.wait()
-        if isinstance(call.result, Exception):
-            raise call.result
+    async def call(self, callback):
+        if self._thread:
+            call = AsyncCallable(callback)
+            await self._thread.queries.put(call)
+            await call.done.wait()
+            if isinstance(call.result, Exception):
+                raise call.result
+            else:
+                return call.result
         else:
-            return call.result
+            raise Exception   # TODO: define not connected exception
 
     def connect(self):
         if not self._thread:
@@ -177,13 +180,13 @@ class Connection:
             await self.commit()
 
     async def cursor(self):
-        return Cursor(self, await self._call(self._thread.connection.cursor))
+        return Cursor(self, await self.call(self._thread.connection.cursor))
 
     async def commit(self):
-        await self._call(self._thread.connection.commit)
+        await self.call(self._thread.connection.commit)
 
     async def rollback(self):
-        await self._call(self._thread.connection.rollback)
+        await self.call(self._thread.connection.rollback)
 
     def close(self):
         if self._thread:
