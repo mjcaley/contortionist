@@ -85,39 +85,60 @@ class Cursor:
         return self._connection
 
 
-def connect(database, timeout=None, detect_types=None, isolation_level=None, cached_statements=None, uri=None, loop=None):
+def connect(database, timeout=5.0, detect_types=0, isolation_level=None, cached_statements=100, uri=None, loop=None):
     loop = loop or asyncio.get_event_loop()
-    connection = Connection(database, loop)
+    connection = Connection(database, timeout, detect_types, isolation_level, cached_statements, uri, loop)
     connection.connect()
 
     return connection
 
 
 class ConnectionThread:
-    def __init__(self, database, *, loop=None):
-        self.database = database
-        self.running = False
+    def __init__(self,
+                 database,
+                 timeout=5.0,
+                 detect_types=0,
+                 isolation_level=None,
+                 cached_statements=100,
+                 uri=None,
+                 loop=None):
+        self._running = False
         self.connection = None
         self.queries = asyncio.Queue()
+
+        self.database = database
+        self.timeout = timeout
+        self.detect_types = detect_types
+        self.isolation_level = isolation_level
+        self.cached_statements = cached_statements
+        self.uri = uri
+
         self.loop = loop or asyncio.get_event_loop()
 
-    def run(self):
-        if not self.running:
-            self.loop.run_in_executor(None, self.thread)
+    @property
+    def running(self):
+        return self._running
 
-    def thread(self):
+    def start(self):
+        if not self._running:
+            self.loop.run_in_executor(None, self.run)
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
         self.connection = sqlite3.connect(
             self.database,
-            # timeout=self.timeout,
-            # detect_types=self.detect_types,
-            # isolation_level=self.isolation_level,
-            # cached_statements=self.cached_statements,
-            # uri=self.uri
+            timeout=self.timeout,
+            detect_types=self.detect_types,
+            isolation_level=self.isolation_level,
+            cached_statements=self.cached_statements,
+            uri=self.uri
         )
 
-        self.running = True
+        self._running = True
 
-        while self.running and self.loop.is_running():
+        while self._running and self.loop.is_running():
             print('sql loop')
             future = asyncio.run_coroutine_threadsafe(self.queries.get(), self.loop)
             try:
@@ -137,15 +158,14 @@ class ConnectionThread:
 
 
 class Connection:
-    def __init__(self, database, loop: asyncio.AbstractEventLoop=None):
-        self.database = database
-        # self.timeout = timeout
-        # self.detect_types = detect_types
-        # self.isolation_level = isolation_level
-        # self.cached_statements = cached_statements
-        # self.uri = uri
-
-        self._thread = None
+    def __init__(self, database,
+                 timeout=5.0,
+                 detect_types=0,
+                 isolation_level=None,
+                 cached_statements=100,
+                 uri=None,
+                 loop=None):
+        self._thread = ConnectionThread(database, timeout, detect_types, isolation_level, cached_statements, uri, loop)
         self.loop = loop or asyncio.get_event_loop()
 
     def __del__(self):
@@ -165,9 +185,8 @@ class Connection:
             raise Exception   # TODO: define not connected exception
 
     def connect(self):
-        if not self._thread:
-            self._thread = ConnectionThread(self.database, loop=self.loop)
-            self._thread.run()
+        if not self._thread.running:
+            self._thread.start()
 
     async def __aenter__(self):
         return self
@@ -189,9 +208,8 @@ class Connection:
         await self.call(self._thread.connection.rollback)
 
     def close(self):
-        if self._thread:
-            self._thread.running = False
-            self._thread = None
+        if self._thread.running:
+            self._thread.stop()
 
     async def execute(self, sql, *parameters):
         cursor = await self.cursor()
