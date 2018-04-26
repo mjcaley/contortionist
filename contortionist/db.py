@@ -8,6 +8,7 @@ from collections import namedtuple
 from functools import partial
 from threading import Event
 
+import time
 
 class AsyncCallable:
     def __init__(self, callback):
@@ -104,7 +105,7 @@ class ConnectionThread:
                  cached_statements=100,
                  uri=None,
                  loop=None):
-        self._running = asyncio.Event()
+        self._running = False
         self.connection = None
         self.queries = asyncio.Queue()
 
@@ -119,18 +120,18 @@ class ConnectionThread:
 
     @property
     def running(self):
-        return self._running.is_set()
+        return self._running
 
     def start(self):
         print('thread start')
-        if not self._running.is_set():
-            self._running.set()
+        if not self._running:
+            self._running = True
             print('spawning thread')
             self.loop.run_in_executor(None, self.run)
 
     def stop(self):
         print('stopping')
-        self._running.clear()
+        self._running = False
 
     def connect(self):
         self.connection = sqlite3.connect(
@@ -146,17 +147,9 @@ class ConnectionThread:
         self.connection.close()
 
     def run(self):
-        # self.connection = sqlite3.connect(
-        #     self.database,
-        #     timeout=self.timeout,
-        #     detect_types=self.detect_types,
-        #     isolation_level=self.isolation_level,
-        #     cached_statements=self.cached_statements,
-        #     uri=self.uri
-        # )
         print('thread spawned')
-        while self._running.is_set() and self.loop.is_running():
-            print('thread loop; loop running', self.loop.is_running(), 'thread running', self._running.is_set())
+        while self._running and self.loop.is_running():
+            print('thread loop; loop running', self.loop.is_running(), 'thread running', self._running)
             future = asyncio.run_coroutine_threadsafe(self.queries.get(), self.loop)
             try:
                 query = future.result(timeout=0.1)
@@ -171,6 +164,8 @@ class ConnectionThread:
             finally:
                 self.loop.call_soon_threadsafe(self.queries.task_done)
                 self.loop.call_soon_threadsafe(query.done.set)
+
+            print('in thread qsize', self.queries.qsize())
         self.connection.close()
 
 
@@ -183,29 +178,35 @@ class Connection:
                  uri=None,
                  loop=None):
         self._thread = ConnectionThread(database, timeout, detect_types, isolation_level, cached_statements, uri, loop)
+        self._open = False
         self.loop = loop or asyncio.get_event_loop()
 
     def __del__(self):
-        self.close()
+        self._thread.stop()
 
     async def call(self, callback):
-        call = AsyncCallable(callback)
-        await self._thread.queries.put(call)
-        await call.done.wait()
-        if isinstance(call.result, Exception):
-            raise call.result
+        if self._open:
+            call = AsyncCallable(callback)
+            await self._thread.queries.put(call)
+            await call.done.wait()
+            if isinstance(call.result, Exception):
+                raise call.result
+            else:
+                return call.result
         else:
-            return call.result
+            raise Exception # TODO: use real exception for database connection closed
 
     async def connect(self):
         if not self._thread.running:
             self._thread.start()
+            self._open = True
             await self.call(self._thread.connect)
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        print('aexit exception', exc_type, exc_val, exc_tb)
         if exc_type:
             await self.rollback()
             return exc_type(exc_val).with_traceback(exc_tb)
@@ -221,11 +222,11 @@ class Connection:
     async def rollback(self):
         await self.call(self._thread.connection.rollback)
 
-    def close(self):
+    async def close(self):
         print('in close')
-        if self._thread.running:
-            print('stopping')
-            self._thread.stop()
+        await self._thread.queries.join()
+        print('stopping')
+        self._thread.stop()
 
     async def execute(self, sql, *parameters):
         cursor = await self.cursor()
@@ -252,47 +253,48 @@ class Connection:
         raise NotImplementedError
 
 
-if __name__ == '__main__':
-    async def main():
-        print('connecting 1')
-        conn = await connect(':memory:')
-        print('connecting 2')
-        conn2 = await connect(':memory:')
-        cursor = await conn.cursor()
-        thing_table = await cursor.execute('create table thing (a,b,c)')
-        async with conn2:
-            print('context manager!')
-            await conn2.execute('create table thing2 (a,b,c)')
-            await conn2.execute('insert into thing2 values (1,2,3)')
-            result = await conn2.execute('select * from thing2')
-            print(await result.fetchall())
-        print('exited context manager')
-        await cursor.execute('insert into thing values (1,2,3)')
-        await cursor.execute('insert into thing values (1,2,3)')
-        await cursor.execute('insert into thing values (1,2,3)')
-        await cursor.execute('insert into thing values (1,2,3)')
-        await cursor.execute('insert into thing values (1,2,3)')
-        await cursor.execute('select * from thing')
-        print('thing_table cursor', await thing_table.fetchall())
-        await cursor.execute('select * from thing')
-        async for row in cursor:
-            print('async iter', row)
-        conn.close()
-
-    async def real_main():
-        import gc
-        print('gc', gc.collect())
-        await main()
-        await asyncio.sleep(3)
-        print('gc', gc.collect())
-        await asyncio.sleep(3)
-
-    loop = asyncio.get_event_loop()
-    # loop.set_debug(True)
-    # logging.basicConfig(level=logging.DEBUG)
-    loop.run_until_complete(real_main())
-    print(loop.is_running())
-    print('hey')
+# if __name__ == '__main__':
+#     async def main():
+#         print('connecting 1')
+#         conn = await connect(':memory:')
+#         print('connecting 2')
+#         conn2 = await connect(':memory:')
+#         cursor = await conn.cursor()
+#         thing_table = await cursor.execute('create table thing (a,b,c)')
+#         async with conn2:
+#             print('context manager!')
+#             await conn2.execute('create table thing2 (a,b,c)')
+#             await conn2.execute('insert into thing2 values (1,2,3)')
+#             result = await conn2.execute('select * from thing2')
+#             print(await result.fetchall())
+#         print('exited context manager')
+#         asyncio.gather(
+#             cursor.execute('insert into thing values (1,2,3)'),
+#             cursor.execute('insert into thing values (1,2,3)'),
+#             cursor.execute('insert into thing values (1,2,3)'),
+#             cursor.execute('insert into thing values (1,2,3)'),
+#             cursor.execute('insert into thing values (1,2,3)'))
+#         await cursor.execute('select * from thing')
+#         print('thing_table cursor', await thing_table.fetchall())
+#         await cursor.execute('select * from thing')
+#         async for row in cursor:
+#             print('async iter', row)
+#         await conn.close()
+#
+#     async def real_main():
+#         import gc
+#         print('gc', gc.collect())
+#         await main()
+#         await asyncio.sleep(3)
+#         print('gc', gc.collect())
+#         await asyncio.sleep(3)
+#
+#     loop = asyncio.get_event_loop()
+#     # loop.set_debug(True)
+#     # logging.basicConfig(level=logging.DEBUG)
+#     loop.run_until_complete(real_main())
+#     print(loop.is_running())
+#     print('hey')
 
 
 DB_NAME = 'contortionist.db'
@@ -328,13 +330,14 @@ class CommandType(Enum):
 
 
 class Database:
-    def __init__(self, filename):
-        self.connection = Connection(filename)
+    def __init__(self, connection):
+        self.connection = connection
 
     async def create_message(self, message, status=MessageStatus.NEW):
         async with self.connection as db:
             result = await db.execute('INSERT INTO messages (message, status) VALUES (?, ?)',
                                       (message, status))
+            print(result)
         return result.lastrowid
 
     async def get_message(self, message_id):
@@ -377,3 +380,47 @@ class Database:
         async with self.connection as db:
             result = await db.execute('SELECT (status) FROM tasks WHERE id=?', (task_id,))
             return TaskStatus((await result.fetchone())[0])
+
+
+if __name__ == '__main__':
+    async def run():
+        d = Database(await connect('new_db.sqlite'))
+        cur = await d.connection.execute('select * from messages')
+        print(await cur.fetchall())
+
+        await d.create_message(1)
+
+#         conn = sqlite3.connect('new_db.sqlite')
+#         conn.executescript('''
+#         -- Contortionist database schema
+#
+# -- Schema version
+# CREATE TABLE IF NOT EXISTS `meta` ( `schema` TEXT UNIQUE, `version` INTEGER, PRIMARY KEY(`schema`) );
+# INSERT OR REPLACE INTO meta (schema, version) VALUES ('contortionist', 1);
+#
+# CREATE TABLE IF NOT EXISTS `messages` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+#                                         `message` TEXT, `status` INTEGER NOT NULL DEFAULT 1 );
+#
+# CREATE TABLE IF NOT EXISTS `jobs` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+#                                     `message_id` INTEGER NOT NULL,
+#                                     `status` INTEGER DEFAULT 1,
+#                                      FOREIGN KEY (`message_id`) REFERENCES `message(id)` );
+#
+# CREATE TABLE IF NOT EXISTS `tasks` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+#                                      `job_id` INTEGER NOT NULL,
+#                                      `name` TEXT NOT NULL,
+#                                      `status` INTEGER DEFAULT 1,
+#                                      `priority` INTEGER NOT NULL,
+#                                       FOREIGN KEY (`job_id`) REFERENCES `jobs(id)` );
+# ''')
+#         conn.commit()
+#         conn.execute('insert into messages values (1, 2, 3)')
+#         conn.commit()
+#         print(conn.execute('select * from messages').fetchall())
+
+
+        # print(await d.create_message('this is a message'))
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(run())
+
