@@ -12,6 +12,7 @@ aiosmtplib = "^1.0"
 aiofiles = "^0.4.0"
 aiospamc = "^0.4.1"
 tomlkit = "^0.5.3"
+aiologger = "^0.3.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^4.4"

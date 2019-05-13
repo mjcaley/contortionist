@@ -8,6 +8,14 @@ version = "0.4.0"
 
 [[package]]
 category = "main"
+description = ""
+name = "aiologger"
+optional = false
+python-versions = "*"
+version = "0.3.0"
+
+[[package]]
+category = "main"
 description = "aiosmtpd - asyncio based SMTP server"
 name = "aiosmtpd"
 optional = false
@@ -169,11 +177,12 @@ python-versions = "*"
 version = "0.1.7"
 
 [metadata]
-content-hash = "27d2c36cc463f0cb1e7e7bdb29fe0915c1e0c68b9bb4d4a5da37308c237e8538"
+content-hash = "885cd408ad8615e1c6f65584ae38927e345e830eaeb9c71e631cab744aec298f"
 python-versions = "^3.6"
 
 [metadata.hashes]
 aiofiles = ["021ea0ba314a86027c166ecc4b4c07f2d40fc0f4b3a950d1868a0f2571c2bbee", "1e644c2573f953664368de28d2aa4c89dfd64550429d0c27c4680ccd3aa4985d"]
+aiologger = ["9de6a87f01ea7b143304af270b8f2dab81a193ea2a0a661a98b2ea0c9a19f1a7"]
 aiosmtpd = ["b7ea7ee663f3b8514d3224d55c4e8827148277b124ea862a0bbfca1bc899aef5"]
 aiosmtplib = ["0e78afa88b64eab14c5c6a42afe28ed1588fe7de784d23d2b09840044bed1308", "a49670819c6764d9a7b2bb4c4a8a381f91423de86b066d3b9fc02f3bed9a1e63"]
 aiospamc = ["183017c2f9aa20240000627566147e794377e53d2da1c3b292ef8b93f2d719c8", "7947f33be8d09e85e9f1c265c58093fdc39f508f4aec698511076802dafdb13c"]

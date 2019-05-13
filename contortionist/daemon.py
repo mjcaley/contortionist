@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 
 import asyncio
+import signal
 from asyncio import Queue
 from email.message import EmailMessage
 from functools import partial
-import logging
 from pathlib import Path
 
 import aiofiles
 import aiosmtpd
 import aiosmtplib
+import aiologger
 
 from aiosmtpd.handlers import AsyncMessage
 from aiosmtpd.smtp import SMTP
@@ -198,6 +199,21 @@ def daemon_factory(config, loop=None):
     daemon = Daemon(None, smtp_server_runner, mail_saver_runner, filter_runner, smtp_client_runner, None)
 
     return daemon
+
+
+class Daemon2:
+    def __init__(self, config, loop=None):
+        self.config = config
+        self.logger = aiologger.Logger.with_default_handlers(name=self.__class__.__qualname__)
+        self.loop = loop
+
+    def run(self, loop=None):
+        self.loop = loop or self.loop or asyncio.get_event_loop()
+
+        self.loop.create_task(self.start())
+
+    async def stop(self, signal, loop):
+        pass
 
 
 if __name__ == '__main__':

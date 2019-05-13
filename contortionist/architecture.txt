@@ -1,0 +1,5 @@
+Daemon starts
+    Sets up signal control
+    Load configuration
+    Connects to database
+    Instantiates SMTP server, SMTP client and Pipeline
